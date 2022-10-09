@@ -1,0 +1,10 @@
+*~
+*.swp
+*.swo
+.*.sw?
+.DS_Store
+build
+**/Makefile
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/CMakeFiles
