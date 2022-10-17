@@ -160,6 +160,18 @@ struct hp_unl_collection
     int npl_fd;
 };
 
+struct map_entry
+{
+    char *key;
+    char *val;
+};
+
+struct map
+{
+    struct map_entry *entries;
+    size_t entry_count;
+};
+
 struct hp_round_limits_config
 {
     size_t user_input_bytes;
@@ -189,7 +201,7 @@ struct hp_config
     struct hp_public_key_collection unl;
     char *bin_path;
     char *bin_args;
-    char *environment;
+    struct map *environment;
     uint32_t roundtime;
     uint32_t stage_slice;
     struct consensus_config consensus;
@@ -738,7 +750,7 @@ struct hp_config *__hp_read_from_patch_file(const int fd)
  */
 int __hp_write_to_patch_file(const int fd, const struct hp_config *config)
 {
-    struct iovec iov_vec[6];
+    struct iovec iov_vec[7];
     // {version: + newline + 4 spaces => 21;
     const size_t version_len = 21 + strlen(config->version);
     char version_buf[version_len];
@@ -770,36 +782,61 @@ int __hp_write_to_patch_file(const int fd, const struct hp_config *config)
 
     // Top-level field values.
 
-    const char *json_string = "    \"bin_path\": \"%s\",\n    \"bin_args\": \"%s\",\n    \"environment\": \"%s\",\n"
-                              "    \"max_input_ledger_offset\": %s,\n";
+    const char *bin_string = "    \"bin_path\": \"%s\",\n    \"bin_args\": \"%s\",\n";
+    const size_t bin_string_len = 43 + strlen(config->bin_path) + strlen(config->bin_args);
+    char bin_buf[bin_string_len];
+    sprintf(bin_buf, bin_string, config->bin_path, config->bin_args);
+    iov_vec[2].iov_base = bin_buf;
+    iov_vec[2].iov_len = bin_string_len;
 
-    char max_input_ledger_offset_str[16];
-    sprintf(max_input_ledger_offset_str, "%d", config->max_input_ledger_offset);
+    pos = 0;
+    const size_t env_buf_size = 20 + (601 * config->environment->entry_count - (config->unl.count ? 1 : 0)) + (14 * config->environment->entry_count);
+    char env_buf[env_buf_size];
 
-    const size_t json_string_len = 96 + strlen(config->bin_path) + strlen(config->bin_args) + strlen(config->environment) + strlen(max_input_ledger_offset_str);
-    char json_buf[json_string_len];
-    sprintf(json_buf, json_string, config->bin_path, config->bin_args, config->environment, max_input_ledger_offset_str);
-    iov_vec[2].iov_base = json_buf;
-    iov_vec[2].iov_len = json_string_len;
+    // Environment fields
+
+    memcpy(env_buf, "    \"environment\": {", 20);
+    map_entry *entry = config->environment->entries;
+    for (size_t i = 0; i < config->environment->entry_count; i++)
+    {
+        if (i > 0)
+            env_buf[pos++] = ',';
+
+        memcpy(env_buf + pos, "\n        ", 9);
+        pos += 9;
+        env_buf[pos++] = '"';
+        memcpy(env_buf + pos, entry->key, strlen(entry->key));
+        pos += strlen(entry->key);
+        env_buf[pos] = '":"';
+        pos += 3;
+        memcpy(env_buf + pos, entry->val, strlen(entry->val));
+        pos += strlen(entry->val);
+        env_buf[pos++] = '"';
+    }
+    memcpy(env_buf + pos, "\n    },\n", 8);
+    iov_vec[3].iov_base = unl_buf;
+    iov_vec[3].iov_len = unl_buf_size;
 
     // Consensus fields
 
-    const char *consensus_json = "    \"consensus\": {\n"
+    const char *consensus_json = "    \"max_input_ledger_offset\": %s,\n"
+                                 "    \"consensus\": {\n"
                                  "        \"mode\": %s,\n        \"roundtime\": %s,\n        \"stage_slice\": %s,\n"
                                  "        \"threshold\": %s\n    },\n";
 
-    char consensus_mode_str[10], roundtime_str[16], stage_slice_str[16], threshold_str[6];
+    char max_input_ledger_offset_str[16], consensus_mode_str[10], roundtime_str[16], stage_slice_str[16], threshold_str[6];
 
+    sprintf(max_input_ledger_offset_str, "%d", config->max_input_ledger_offset);
     sprintf(consensus_mode_str, "\"%s\"", config->consensus.mode == PUBLIC ? "public" : "private");
     sprintf(roundtime_str, "%d", config->consensus.roundtime);
     sprintf(stage_slice_str, "%d", config->consensus.stage_slice);
     sprintf(threshold_str, "%d", config->consensus.threshold);
 
-    const size_t consensus_json_len = 114 + strlen(consensus_mode_str) + strlen(roundtime_str) + strlen(stage_slice_str) + strlen(threshold_str);
+    const size_t consensus_json_len = 146 + strlen(max_input_ledger_offset_str) + strlen(consensus_mode_str) + strlen(roundtime_str) + strlen(stage_slice_str) + strlen(threshold_str);
     char consensus_buf[consensus_json_len];
-    sprintf(consensus_buf, consensus_json, consensus_mode_str, roundtime_str, stage_slice_str, threshold_str);
-    iov_vec[3].iov_base = consensus_buf;
-    iov_vec[3].iov_len = consensus_json_len;
+    sprintf(consensus_buf, consensus_json, max_input_ledger_offset_str, consensus_mode_str, roundtime_str, stage_slice_str, threshold_str);
+    iov_vec[4].iov_base = consensus_buf;
+    iov_vec[4].iov_len = consensus_json_len;
 
     // npl field values
 
@@ -811,8 +848,8 @@ int __hp_write_to_patch_file(const int fd, const struct hp_config *config)
     const size_t npl_json_len = 37 + strlen(npl_mode_str);
     char npl_buf[npl_json_len];
     sprintf(npl_buf, npl_json, npl_mode_str);
-    iov_vec[4].iov_base = npl_buf;
-    iov_vec[4].iov_len = npl_json_len;
+    iov_vec[5].iov_base = npl_buf;
+    iov_vec[5].iov_len = npl_json_len;
 
     // Round limits field values.
 
@@ -837,8 +874,8 @@ int __hp_write_to_patch_file(const int fd, const struct hp_config *config)
     sprintf(round_limits_buf, round_limits_json,
             user_input_bytes_str, user_output_bytes_str, npl_output_bytes_str,
             proc_cpu_seconds_str, proc_mem_bytes_str, proc_ofd_count_str);
-    iov_vec[5].iov_base = round_limits_buf;
-    iov_vec[5].iov_len = round_limits_json_len;
+    iov_vec[6].iov_base = round_limits_buf;
+    iov_vec[6].iov_len = round_limits_json_len;
 
     if (ftruncate(fd, 0) == -1 ||         // Clear any previous content in the file.
         pwritev(fd, iov_vec, 6, 0) == -1) // Start writing from begining.
@@ -894,7 +931,32 @@ void __hp_populate_patch_from_json_object(struct hp_config *config, const struct
         }
         else if (strcmp(k->string, "environment") == 0)
         {
-            __HP_ASSIGN_CHAR_PTR(config->environment, elem);
+            if (elem->value->type == json_type_object)
+            {
+                const struct json_object_s *env_obj = (struct json_object_s *)elem->value->payload;
+                const size_t elem_count = env_obj->length;
+
+                config->environment->entry_count = elem_count;
+                config->environment->entries = elem_count ? (struct map_entry *)malloc(sizeof(struct map_entry) * elem_count) : NULL;
+
+                if (elem_count > 0)
+                {
+                    struct json_object_element_s *env_elem = env_obj->start;
+                    for (size_t i = 0; i < elem_count; i++)
+                    {
+                        config->environment->entries[i].key = (char *)malloc(env_elem->name->string_size + 1);
+                        memcpy(config->environment->entries[i].key, env_elem->name->string, env_elem->name->string_size + 1);
+
+                        if (env_elem->value->type == json_type_string)
+                        {
+                            const struct json_string_s *value = (struct json_string_s *)env_elem->value->payload;
+                            config->environment->entries[i].val = (char *)malloc(value->string_size + 1);
+                            memcpy(config->environment->entries[i].val, value->string, value->string_size + 1);
+                        }
+                        env_elem = env_elem->next;
+                    }
+                }
+            }
         }
         else if (strcmp(k->string, "max_input_ledger_offset") == 0)
         {
