@@ -807,7 +807,7 @@ int __hp_write_to_patch_file(const int fd, const struct hp_config *config)
         env_buf[pos++] = '"';
         memcpy(env_buf + pos, entry->key, strlen(entry->key));
         pos += strlen(entry->key);
-        env_buf[pos] = '":"';
+        memcpy(env_buf + pos, "\":\"", 3);
         pos += 3;
         memcpy(env_buf + pos, entry->val, strlen(entry->val));
         pos += strlen(entry->val);
