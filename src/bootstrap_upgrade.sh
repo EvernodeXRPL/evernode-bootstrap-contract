@@ -124,17 +124,16 @@ function upgrade() {
             return 1
         fi
 
-        contract_config=hp2.cfg
         env_config=$(jq '.environment' $contract_config)
         if [ "$env_config" != "null" ]; then
             jq -e '.environment|type!="object"' $contract_config >/dev/null &&
                 echo "Contract environment invalid. Invalid format. Should be an object with string keys and string values." &&
-                exit 1
+                return 1
 
             jq -e '[.environment|to_entries | .[] | select(.value|type!="string") ] | any' $contract_config >/dev/null &&
                 echo "Contract environment variables type should be string" &&
-                exit 1
-            patch_json="$patch_json,unl:$env_config"
+                return 1
+            patch_json="$patch_json,environment:$env_config"
         fi
 
         if ! append_string_field "version" 1; then
