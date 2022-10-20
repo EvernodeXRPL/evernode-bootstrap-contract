@@ -124,8 +124,16 @@ function upgrade() {
             return 1
         fi
 
-        if ! append_string_field "environment"; then
-            return 1
+        env_config=$(jq '.environment' $contract_config)
+        if [ "$env_config" != "null" ]; then
+            jq -e '.environment|type!="object"' $contract_config >/dev/null &&
+                echo "Contract environment config format is invalid. Its format should be an object with string keys and string values." &&
+                return 1
+
+            jq -e '[.environment|to_entries | .[] | select(.value|type!="string") ] | any' $contract_config >/dev/null &&
+                echo "Each contract environment variable's type should be a string." &&
+                return 1
+            patch_json="$patch_json,environment:$env_config"
         fi
 
         if ! append_string_field "version" 1; then
