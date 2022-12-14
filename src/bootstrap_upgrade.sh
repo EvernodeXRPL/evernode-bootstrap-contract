@@ -216,8 +216,16 @@ function upgrade() {
         echo "All $contract_config checks passed."
 
         echo "Updating $patch_cfg file."
-        local new_patch=$(jq -M ". + $patch_json" $patch_cfg) # Merge jsons
-        cp $patch_cfg $patch_cfg_bk                           # Make a backup.
+        echo "All $contract_config checks passed."
+
+        echo "Updating $patch_cfg file."
+        temp_cfg="../temp.cfg"
+        echo "{}" >$temp_cfg
+        new_patch_temp=$(jq -M ". + $patch_json" $temp_cfg)
+        echo $new_patch_temp >$temp_cfg
+        local new_patch=$(jq -M -s '.[0] * .[1]' $patch_cfg $temp_cfg) # Merge jsons.
+        rm $temp_cfg
+        cp $patch_cfg $patch_cfg_bk                                    # Make a backup.                     
         echo "$new_patch" >$patch_cfg
 
         # Remove contract.config after patch file update.
