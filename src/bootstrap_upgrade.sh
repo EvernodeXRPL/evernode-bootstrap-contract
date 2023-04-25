@@ -15,6 +15,7 @@ self_original_name="bootstrap_upgrade.sh" # Original name of this script before 
 self_path=$(realpath $0)                  # Full path of this script.
 self_name=$(basename $self_path)          # File name of this script.
 self_dir=$(dirname $self_path)            # Parent path of this script.
+upload_err_file="upload.err"
 
 # If field exists, append to patch json.
 function append_string_field() {
@@ -80,11 +81,21 @@ function append_range_field() {
     return 0
 }
 
+function print_err() {
+    local error=$1
+    log=$(jq . $upload_err_file)
+    for key in $(jq -c 'keys[]' <<<$log); do
+        log=$(jq ".$key = \"$error\"" <<<$log)
+    done
+    echo $log >$upload_err_file
+}
+
 function upgrade() {
 
     # Check for binary archive availability.
     if [ ! -f "$archive_name" ]; then
         echo "Required $archive_name not found. Exiting.."
+        print_err "BundleNotFound"
         return 1
     fi
 
@@ -93,6 +104,7 @@ function upgrade() {
     # unzip command is used for zip extraction.
     if ! command -v unzip &>/dev/null; then
         echo "unzip utility not found. Exiting.."
+        print_err "UnzipBundleNotFound"
         return 1
     fi
 
@@ -103,6 +115,7 @@ function upgrade() {
         # jq command is used for json manipulation.
         if ! command -v jq &>/dev/null; then
             echo "jq utility not found. Exiting.."
+            print_err "JqBundleNotFound"
             return 1
         fi
 
@@ -112,15 +125,18 @@ function upgrade() {
         local bin_path=$(jq '.bin_path' $contract_config)
         if [ "$bin_path" == "null" ] || [ ${#bin_path} -eq 2 ]; then # Empty means "" or ''
             echo "bin_path cannot be empty"
+            print_err "BinPathEmpty"
             return 1
         elif [ ! -f "${bin_path:1:-1}" ]; then
             echo "Given binary file: $bin_path not found"
+            print_err "BinaryNotFound"
             return 1
         else
             patch_json="{bin_path:$bin_path"
         fi
 
         if ! append_string_field "bin_args"; then
+            print_err "InvalidBinArgs"
             return 1
         fi
 
@@ -128,19 +144,21 @@ function upgrade() {
         if [ "$env_config" != "null" ]; then
             jq -e '.environment|type!="object"' $contract_config >/dev/null &&
                 echo "Contract environment config format is invalid. Its format should be an object with string keys and string values." &&
-                return 1
+                print_err "InvalidEnvFormat" && return 1
 
             jq -e '[.environment|to_entries | .[] | select(.value|type!="string") ] | any' $contract_config >/dev/null &&
                 echo "Each contract environment variable's type should be a string." &&
-                return 1
+                print_err "InvalidEnvFormat" && return 1
             patch_json="$patch_json,environment:$env_config"
         fi
 
         if ! append_string_field "version" 1; then
+            print_err "InvalidVersion"
             return 1
         fi
 
         if ! append_gt0_field "max_input_ledger_offset"; then
+            print_err "InvalidMaxInputLedgerOffset"
             return 1
         fi
 
@@ -149,6 +167,7 @@ function upgrade() {
             unl_res=$(jq '.unl? | map(length == 66 and startswith("ed")) | index(false)' $contract_config)
             if [ "$unl_res" != "null" ]; then
                 echo "Unl pubkey invalid. Invalid format. Key should be 66 in length with ed prefix"
+                print_err "InvalidUnlPubkey"
                 return 1
             fi
             patch_json="$patch_json,unl:$unl"
@@ -159,15 +178,19 @@ function upgrade() {
             patch_json="$patch_json,consensus:{"
 
             if ! append_mode_field "consensus.mode"; then
+                print_err "InvalidConsensusMode"
                 return 1
             fi
             if ! append_range_field "consensus.roundtime" 0 3600000; then
+                print_err "InvalidConsensusRoundtime"
                 return 1
             fi
             if ! append_range_field "consensus.stage_slice" 0 33; then
+                print_err "InvalidConsensusStageSlice"
                 return 1
             fi
             if ! append_range_field "consensus.threshold" 1 100; then
+                print_err "InvalidConsensusThreshold"
                 return 1
             fi
 
@@ -179,6 +202,7 @@ function upgrade() {
             patch_json="$patch_json,npl:{"
 
             if ! append_mode_field "npl.mode"; then
+                print_err "InvalidNplMode"
                 return 1
             fi
 
@@ -190,21 +214,27 @@ function upgrade() {
             patch_json="$patch_json,round_limits:{"
 
             if ! append_gt0_field "round_limits.user_input_bytes"; then
+                print_err "InvalidUserInputBytes"
                 return 1
             fi
             if ! append_gt0_field "round_limits.user_output_bytes"; then
+                print_err "InvalidUserOutputBytes"
                 return 1
             fi
             if ! append_gt0_field "round_limits.npl_output_bytes"; then
+                print_err "InvalidNplOutputBytes"
                 return 1
             fi
             if ! append_gt0_field "round_limits.proc_cpu_seconds"; then
+                print_err "InvalidProcCpuSeconds"
                 return 1
             fi
             if ! append_gt0_field "round_limits.proc_mem_bytes"; then
+                print_err "InvalidProcMemBytes"
                 return 1
             fi
             if ! append_gt0_field "round_limits.proc_ofd_count"; then
+                print_err "InvalidProcOfdCount"
                 return 1
             fi
 
@@ -225,7 +255,7 @@ function upgrade() {
         echo $new_patch_temp >$temp_cfg
         local new_patch=$(jq -M -s '.[0] * .[1]' $patch_cfg $temp_cfg) # Merge jsons.
         rm $temp_cfg
-        cp $patch_cfg $patch_cfg_bk                                    # Make a backup.                     
+        cp $patch_cfg $patch_cfg_bk # Make a backup.
         echo "$new_patch" >$patch_cfg
 
         # Remove contract.config after patch file update.
@@ -247,6 +277,7 @@ function upgrade() {
             return 0
         else
             echo "$install_script ended with exit code:$installcode"
+            print_err "InstallScriptFailed"
             return 1
         fi
     fi
@@ -260,8 +291,8 @@ function rollback() {
     # Restore patch.cfg if backup exists
     [ -f $patch_cfg_bk ] && mv $patch_cfg_bk $patch_cfg
     # Remove all files except the ones we need.
-    find . -not \( -name $bootstrap_bin -or -name $self_original_name \) -delete
-    return 0
+    find . -not \( -name $bootstrap_bin -or -name $self_original_name -or -name $upload_err_file \) -delete
+    return 1
 }
 
 # Perform upgrade and rollback if failed.
@@ -272,7 +303,7 @@ pushd $self_dir >/dev/null 2>&1
 if [ "$upgradecode" -eq "0" ]; then
     # We have upgraded the contract successfully. Cleanup bootstrap contract resources.
     echo "Upgrade successful. Cleaning up."
-    rm $archive_name $bootstrap_bin $patch_cfg_bk
+    rm -f $archive_name $bootstrap_bin $patch_cfg_bk $upload_err_file
 else
     echo "Upgrade failed. Rolling back."
     rollback
