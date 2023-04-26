@@ -15,7 +15,7 @@ self_original_name="bootstrap_upgrade.sh" # Original name of this script before 
 self_path=$(realpath $0)                  # Full path of this script.
 self_name=$(basename $self_path)          # File name of this script.
 self_dir=$(dirname $self_path)            # Parent path of this script.
-upload_err_file="upload.err"
+post_exec_err_file="post_exec.err"
 
 # If field exists, append to patch json.
 function append_string_field() {
@@ -83,11 +83,11 @@ function append_range_field() {
 
 function print_err() {
     local error=$1
-    log=$(jq . $upload_err_file)
+    log=$(jq . $post_exec_err_file)
     for key in $(jq -c 'keys[]' <<<$log); do
         log=$(jq ".$key = \"$error\"" <<<$log)
     done
-    echo $log >$upload_err_file
+    echo $log >$post_exec_err_file
 }
 
 function upgrade() {
@@ -291,7 +291,7 @@ function rollback() {
     # Restore patch.cfg if backup exists
     [ -f $patch_cfg_bk ] && mv $patch_cfg_bk $patch_cfg
     # Remove all files except the ones we need.
-    find . -not \( -name $bootstrap_bin -or -name $self_original_name -or -name $upload_err_file \) -delete
+    find . -not \( -name $bootstrap_bin -or -name $self_original_name -or -name $post_exec_err_file \) -delete
     return 1
 }
 
@@ -303,7 +303,7 @@ pushd $self_dir >/dev/null 2>&1
 if [ "$upgradecode" -eq "0" ]; then
     # We have upgraded the contract successfully. Cleanup bootstrap contract resources.
     echo "Upgrade successful. Cleaning up."
-    rm -f $archive_name $bootstrap_bin $patch_cfg_bk $upload_err_file
+    rm -f $archive_name $bootstrap_bin $patch_cfg_bk $post_exec_err_file
 else
     echo "Upgrade failed. Rolling back."
     rollback

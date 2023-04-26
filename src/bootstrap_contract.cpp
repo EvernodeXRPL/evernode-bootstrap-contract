@@ -22,7 +22,7 @@ constexpr const char *UNKNOWN_RES = "unknownResult";
 constexpr const char *UPLOAD_INPUT = "upload";
 constexpr const char *STATUS_INPUT = "status";
 
-constexpr const char *UPLOAD_ERR_FILE = "upload.err";
+constexpr const char *POST_EXEC_ERR_FILE = "post_exec.err";
 
 #define HP_DEINIT                    \
     {                                \
@@ -46,24 +46,24 @@ int main(int argc, char **argv)
     // Read and process all user inputs from the mmap.
     const void *input_mmap = hp_init_user_input_mmap();
 
-    // Read error logs if any.
-    jsoncons::ojson log;
-    const int error_log_res = read_upload_err_log(log);
+    // Read post exec errors if any.
+    jsoncons::ojson post_exec_err;
+    const int error_log_res = read_post_exec_err_log(post_exec_err);
 
-    // Clear the temp log file once read.
+    // Clear the post exec log file once read.
     if (error_log_res >= 0)
-        clear_upload_err_log();
+        clear_post_exec_err_log();
 
     // Iterate through all users.
     for (size_t u = 0; u < ctx->users.count; u++)
     {
         const struct hp_user *user = &ctx->users.list[u];
 
-        // If there are errors, Send them to user and clear the logs.
-        if (error_log_res >= 0 && log.contains(user->public_key.data))
+        // If there are post exec errors for this user, Send them to the user and clear the logs.
+        if (error_log_res >= 0 && post_exec_err.contains(user->public_key.data))
         {
-            std::string_view error = log[user->public_key.data].as_string_view();
-            log.erase(user->public_key.data);
+            std::string_view error = post_exec_err[user->public_key.data].as_string_view();
+            post_exec_err.erase(user->public_key.data);
             if (error.length() > 0)
                 send_response_message(user, UPLOAD_RES, RESULT_FAIL, error);
         }
@@ -95,9 +95,6 @@ int main(int argc, char **argv)
             {
                 if (type == UPLOAD_INPUT)
                 {
-                    log.insert_or_assign(user->public_key.data, "");
-                    write_upload_err_log(log);
-
                     const jsoncons::byte_string_view data = d["content"].as_byte_string_view();
 
                     const int archive_fd = open(BUNDLE_NAME, O_CREAT | O_TRUNC | O_RDWR, 0644);
@@ -125,6 +122,10 @@ int main(int argc, char **argv)
                     // Emit success response to the user.
                     send_response_message(user, UPLOAD_RES, RESULT_OK, "UploadSuccess");
 
+                    // Create error log file to write errors on post exec execution.
+                    post_exec_err.insert_or_assign(user->public_key.data, "");
+                    write_post_exec_err_log(post_exec_err);
+
                     // We have found our contract package input. No need to iterate further.
                     break;
                 }
@@ -148,29 +149,26 @@ int main(int argc, char **argv)
                 return -1;
             }
         }
-
-        // We don't need to further iterate through user list. We have found our authenticated user to reach this place.
-        break;
     }
 
-    log.clear();
+    post_exec_err.clear();
 
     HP_DEINIT;
     return 0;
 }
 
-int write_upload_err_log(const jsoncons::ojson &log)
+int write_post_exec_err_log(const jsoncons::ojson &err_log)
 {
     std::string json;
     jsoncons::json_options options;
     options.object_array_line_splits(jsoncons::line_split_kind::multi_line);
     options.spaces_around_comma(jsoncons::spaces_option::no_spaces);
     std::ostringstream os;
-    os << jsoncons::pretty_print(log, options);
+    os << jsoncons::pretty_print(err_log, options);
     json = os.str();
     os.clear();
 
-    const int fd = open(UPLOAD_ERR_FILE, O_CREAT | O_RDWR | O_TRUNC, 0644);
+    const int fd = open(POST_EXEC_ERR_FILE, O_CREAT | O_RDWR | O_TRUNC, 0644);
     if (fd == -1 || write(fd, json.data(), json.size()) == -1)
     {
         if (fd != -1)
@@ -182,9 +180,9 @@ int write_upload_err_log(const jsoncons::ojson &log)
     return 0;
 }
 
-int read_upload_err_log(jsoncons::ojson &log)
+int read_post_exec_err_log(jsoncons::ojson &err_log)
 {
-    const int fd = open(UPLOAD_ERR_FILE, O_RDONLY);
+    const int fd = open(POST_EXEC_ERR_FILE, O_RDONLY);
     struct stat st;
     if (fstat(fd, &st) == -1)
         return -1;
@@ -197,21 +195,21 @@ int read_upload_err_log(jsoncons::ojson &log)
             close(fd);
         return -1;
     }
-    log = jsoncons::ojson::parse(buf, jsoncons::strict_json_parsing());
+    err_log = jsoncons::ojson::parse(buf, jsoncons::strict_json_parsing());
 
     buf.clear();
     close(fd);
     return 0;
 }
 
-int clear_upload_err_log()
+int clear_post_exec_err_log()
 {
-    const int fd = open(UPLOAD_ERR_FILE, O_RDONLY);
+    const int fd = open(POST_EXEC_ERR_FILE, O_RDONLY);
     struct stat st;
     if (fstat(fd, &st) == -1)
         return 0;
     close(fd);
-    std::remove(UPLOAD_ERR_FILE);
+    std::remove(POST_EXEC_ERR_FILE);
     return 0;
 }
 
