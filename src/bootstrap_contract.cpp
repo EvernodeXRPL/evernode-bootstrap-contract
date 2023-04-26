@@ -87,8 +87,7 @@ int main(int argc, char **argv)
             {
                 std::cerr << "User not allowed.\n";
                 send_response_message(user, (type == UPLOAD_INPUT ? UPLOAD_RES : (type == STATUS_INPUT ? STATUS_RES : UNKNOWN_RES)), RESULT_FAIL, "UserNotAllowed");
-                HP_DEINIT;
-                return -1;
+                continue;
             }
 
             try
@@ -103,8 +102,7 @@ int main(int argc, char **argv)
                         std::cerr << errno << ": Error saving given file.\n";
                         close(archive_fd);
                         send_response_message(user, UPLOAD_RES, RESULT_FAIL, "BundleFailed");
-                        HP_DEINIT;
-                        return -1;
+                        continue;
                     }
                     close(archive_fd);
 
@@ -115,8 +113,7 @@ int main(int argc, char **argv)
                     {
                         std::cerr << errno << ": Chmod failed for " << HP_POST_EXEC_SCRIPT_NAME << std::endl;
                         send_response_message(user, UPLOAD_RES, RESULT_FAIL, "ScriptFailed");
-                        HP_DEINIT;
-                        return -1;
+                        continue;
                     }
 
                     // Emit success response to the user.
@@ -137,16 +134,14 @@ int main(int argc, char **argv)
                 {
                     std::cerr << "Invalid message type" << std::endl;
                     send_response_message(user, UNKNOWN_RES, RESULT_FAIL, "InvalidMessageType");
-                    HP_DEINIT;
-                    return -1;
+                    continue;
                 }
             }
             catch (const std::exception &e)
             {
                 std::cerr << e.what() << '\n';
                 send_response_message(user, (type == UPLOAD_INPUT ? UPLOAD_RES : (type == STATUS_INPUT ? STATUS_RES : UNKNOWN_RES)), RESULT_FAIL, "InternalError");
-                HP_DEINIT;
-                return -1;
+                continue;
             }
         }
     }
