@@ -292,7 +292,7 @@ function rollback() {
     [ -f $patch_cfg_bk ] && mv $patch_cfg_bk $patch_cfg
     # Remove all files except the ones we need.
     find . -not \( -name $bootstrap_bin -or -name $self_original_name -or -name $post_exec_err_file \) -delete
-    return 1
+    return 0
 }
 
 # Perform upgrade and rollback if failed.
