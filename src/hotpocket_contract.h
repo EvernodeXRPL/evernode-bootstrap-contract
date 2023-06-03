@@ -180,6 +180,7 @@ struct hp_round_limits_config
     size_t proc_cpu_seconds;
     size_t proc_mem_bytes;
     size_t proc_ofd_count;
+    size_t exec_timeout;
 };
 
 struct consensus_config
@@ -579,7 +580,8 @@ int hp_update_config(const struct hp_config *config)
         __HP_UPDATE_CONFIG_ERROR("Invalid npl mode. Valid values: public|private");
 
     if (config->round_limits.user_input_bytes < 0 || config->round_limits.user_output_bytes < 0 || config->round_limits.npl_output_bytes < 0 ||
-        config->round_limits.proc_cpu_seconds < 0 || config->round_limits.proc_mem_bytes < 0 || config->round_limits.proc_ofd_count < 0)
+        config->round_limits.proc_cpu_seconds < 0 || config->round_limits.proc_mem_bytes < 0 || config->round_limits.proc_ofd_count < 0 ||
+        config->round_limits.exec_timeout < 0)
         __HP_UPDATE_CONFIG_ERROR("Invalid round limits.");
 
     const int fd = open(__HP_PATCH_FILE_PATH, O_RDWR);
@@ -796,7 +798,7 @@ int __hp_write_to_patch_file(const int fd, const struct hp_config *config)
     // Environment fields
 
     memcpy(env_buf, "    \"environment\": {", 20);
-    map_entry *entry = config->environment->entries;
+    struct map_entry *entry = config->environment->entries;
     for (size_t i = 0; i < config->environment->entry_count; i++)
     {
         if (i > 0)
@@ -855,10 +857,10 @@ int __hp_write_to_patch_file(const int fd, const struct hp_config *config)
 
     const char *round_limits_json = "    \"round_limits\": {\n"
                                     "        \"user_input_bytes\": %s,\n        \"user_output_bytes\": %s,\n        \"npl_output_bytes\": %s,\n"
-                                    "        \"proc_cpu_seconds\": %s,\n        \"proc_mem_bytes\": %s,\n        \"proc_ofd_count\": %s\n    }\n}";
+                                    "        \"proc_cpu_seconds\": %s,\n        \"proc_mem_bytes\": %s,\n        \"proc_ofd_count\": %s\n        \"exec_timeout\": %s\n    }\n}";
 
     char user_input_bytes_str[20], user_output_bytes_str[20], npl_output_bytes_str[20],
-        proc_cpu_seconds_str[20], proc_mem_bytes_str[20], proc_ofd_count_str[20];
+        proc_cpu_seconds_str[20], proc_mem_bytes_str[20], proc_ofd_count_str[20], exec_timeout_str[20];
 
     sprintf(user_input_bytes_str, "%" PRIu64, config->round_limits.user_input_bytes);
     sprintf(user_output_bytes_str, "%" PRIu64, config->round_limits.user_output_bytes);
@@ -867,13 +869,14 @@ int __hp_write_to_patch_file(const int fd, const struct hp_config *config)
     sprintf(proc_cpu_seconds_str, "%" PRIu64, config->round_limits.proc_cpu_seconds);
     sprintf(proc_mem_bytes_str, "%" PRIu64, config->round_limits.proc_mem_bytes);
     sprintf(proc_ofd_count_str, "%" PRIu64, config->round_limits.proc_ofd_count);
+    sprintf(exec_timeout_str, "%" PRIu64, config->round_limits.exec_timeout);
 
-    const size_t round_limits_json_len = 205 + strlen(user_input_bytes_str) + strlen(user_output_bytes_str) + strlen(npl_output_bytes_str) +
-                                         strlen(proc_cpu_seconds_str) + strlen(proc_mem_bytes_str) + strlen(proc_ofd_count_str);
+    const size_t round_limits_json_len = 230 + strlen(user_input_bytes_str) + strlen(user_output_bytes_str) + strlen(npl_output_bytes_str) +
+                                         strlen(proc_cpu_seconds_str) + strlen(proc_mem_bytes_str) + strlen(proc_ofd_count_str) + strlen(exec_timeout_str);
     char round_limits_buf[round_limits_json_len];
     sprintf(round_limits_buf, round_limits_json,
             user_input_bytes_str, user_output_bytes_str, npl_output_bytes_str,
-            proc_cpu_seconds_str, proc_mem_bytes_str, proc_ofd_count_str);
+            proc_cpu_seconds_str, proc_mem_bytes_str, proc_ofd_count_str, exec_timeout_str);
     iov_vec[6].iov_base = round_limits_buf;
     iov_vec[6].iov_len = round_limits_json_len;
 
@@ -1038,6 +1041,10 @@ void __hp_populate_patch_from_json_object(struct hp_config *config, const struct
                 else if (strcmp(sub_ele->name->string, "proc_ofd_count") == 0)
                 {
                     __HP_ASSIGN_UINT64(config->round_limits.proc_ofd_count, sub_ele);
+                }
+                else if (strcmp(sub_ele->name->string, "exec_timeout") == 0)
+                {
+                    __HP_ASSIGN_UINT64(config->round_limits.exec_timeout, sub_ele);
                 }
                 sub_ele = sub_ele->next;
             } while (sub_ele);
