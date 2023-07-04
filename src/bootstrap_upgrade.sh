@@ -302,6 +302,7 @@ upgradecode=$?
 pushd $self_dir >/dev/null 2>&1
 if [ "$upgradecode" -eq "0" ]; then
     # We have upgraded the contract successfully. Cleanup bootstrap contract resources.
+    echo "Upgrade successful. Cleaning up."
 
     # If we have a deployed a bootstrap contract again, the bootstrap contract resources won't be removed.
     if [[ ! -f ./bootstrap_upgrade.sh ]]; then
