@@ -5,7 +5,6 @@
 echo "Sashimono bootstrap contract upgrader."
 echo "Execution lcl $1-$2"
 
-archive_name="bundle.zip"
 bootstrap_bin="bootstrap_contract"
 install_script="install.sh"
 patch_cfg="../patch.cfg"
@@ -91,25 +90,6 @@ function print_err() {
 }
 
 function upgrade() {
-
-    # Check for binary archive availability.
-    if [ ! -f "$archive_name" ]; then
-        echo "Required $archive_name not found. Exiting.."
-        print_err "BundleNotFound"
-        return 1
-    fi
-
-    # Unzipping the archive.
-
-    # unzip command is used for zip extraction.
-    if ! command -v unzip &>/dev/null; then
-        echo "unzip utility not found. Exiting.."
-        print_err "UnzipBundleNotFound"
-        return 1
-    fi
-
-    unzip -o $archive_name >>/dev/null
-
     if [ -f "$contract_config" ]; then
 
         # jq command is used for json manipulation.
@@ -303,7 +283,7 @@ pushd $self_dir >/dev/null 2>&1
 if [ "$upgradecode" -eq "0" ]; then
     # We have upgraded the contract successfully. Cleanup bootstrap contract resources.
     echo "Upgrade successful. Cleaning up."
-    rm -f $archive_name $bootstrap_bin $patch_cfg_bk $post_exec_err_file
+    rm -f $bootstrap_bin $patch_cfg_bk $post_exec_err_file
 else
     echo "Upgrade failed. Rolling back."
     rollback

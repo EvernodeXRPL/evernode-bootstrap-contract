@@ -11,6 +11,8 @@ constexpr const char *SCRIPT_NAME = "bootstrap_upgrade.sh";
 
 // Filename of the contract bundle archive supplied by the user.
 constexpr const char *BUNDLE_NAME = "bundle.zip";
+constexpr const char *HP_CFG_OVERRIDE_NAME = "hp.cfg.override";
+constexpr const char *CONTRACT_CFG_NAME = "contract.config";
 
 constexpr const char *RESULT_OK = "ok";
 constexpr const char *RESULT_FAIL = "fail";
@@ -105,6 +107,150 @@ int main(int argc, char **argv)
                         continue;
                     }
                     close(archive_fd);
+
+                    // Unzip and remove the bundle.
+                    std::string command = "/usr/bin/unzip -o %s && rm -f %s";
+                    command.resize(28 + 20);
+                    sprintf((char *)command.data(), "/usr/bin/unzip -o %s && rm -f %s", BUNDLE_NAME, BUNDLE_NAME);
+                    const int ret = system(command.data());
+                    command.clear();
+                    if (ret < 0)
+                    {
+                        std::cerr << errno << ": System call failed " << std::endl;
+                        send_response_message(user, UPLOAD_RES, RESULT_FAIL, "SyscallFailed");
+                        continue;
+                    }
+
+                    if (WIFEXITED(ret) && WEXITSTATUS(ret) != 0x00)
+                    {
+                        std::cerr << "Unzip failed " << std::endl;
+                        send_response_message(user, UPLOAD_RES, RESULT_FAIL, "UnzipFailed");
+                        continue;
+                    }
+
+                    // Check wether hp config override file exist.
+                    int cfg_fd = open(HP_CFG_OVERRIDE_NAME, O_RDONLY);
+                    struct stat st;
+                    if (cfg_fd != -1 && fstat(cfg_fd, &st) != -1)
+                    {
+                        // Handle overrides if file exists.
+                        std::string buf;
+                        buf.resize(st.st_size);
+
+                        if (read(cfg_fd, (void *)buf.data(), buf.size()) < 0)
+                        {
+                            std::cerr << errno << ": Reading the file failed " << HP_CFG_OVERRIDE_NAME << std::endl;
+                            close(cfg_fd);
+                            send_response_message(user, UPLOAD_RES, RESULT_FAIL, "HpCfgReadFailed");
+                            continue;
+                        }
+
+                        close(cfg_fd);
+
+                        // Read the contract section if file exists.
+                        jsoncons::ojson hp_cfg;
+
+                        // Try to parse the config file.
+                        try
+                        {
+                            hp_cfg = jsoncons::ojson::parse(buf, jsoncons::strict_json_parsing());
+                            buf.clear();
+                        }
+                        catch (const std::exception &e)
+                        {
+                            std::cerr << "Parsing the config failed failed " << HP_CFG_OVERRIDE_NAME << std::endl;
+                            send_response_message(user, UPLOAD_RES, RESULT_FAIL, "HpCfgJsonFailed");
+                            continue;
+                        }
+
+                        // Handle sections in the hp config override (Only the contract and the mesh sections are handled currently).
+                        // Contract section.
+                        if (hp_cfg.contains("contract"))
+                        {
+                            jsoncons::ojson contract_cfg;
+
+                            // Check whether contract config exists. Override the contract config if it exists.
+                            // Otherwise create a new contract config.
+                            cfg_fd = open(CONTRACT_CFG_NAME, O_RDONLY);
+                            if (cfg_fd != -1 && fstat(cfg_fd, &st) != -1)
+                            {
+                                buf.resize(st.st_size);
+
+                                if (read(cfg_fd, (void *)buf.data(), buf.size()) < 0)
+                                {
+                                    std::cerr << errno << ": Reading the file failed " << CONTRACT_CFG_NAME << std::endl;
+                                    close(cfg_fd);
+                                    send_response_message(user, UPLOAD_RES, RESULT_FAIL, "ContractCfgReadFailed");
+                                    continue;
+                                }
+
+                                // Read the contract config if file exists.
+                                // Try to parse the config file.
+                                try
+                                {
+                                    contract_cfg = jsoncons::ojson::parse(buf, jsoncons::strict_json_parsing());
+                                    buf.clear();
+                                }
+                                catch (const std::exception &e)
+                                {
+                                    std::cerr << "Parsing the config failed failed " << CONTRACT_CFG_NAME << std::endl;
+                                    send_response_message(user, UPLOAD_RES, RESULT_FAIL, "ContractCfgJsonFailed");
+                                    continue;
+                                }
+                            }
+
+                            close(cfg_fd);
+
+                            // Override or update the contract config from hp override.
+                            contract_cfg.merge_or_update(std::move(hp_cfg["contract"]));
+
+                            // Write the new contract config to the contract config file.
+                            std::string json;
+                            contract_cfg.dump(json);
+
+                            // Check whether contract config exists.
+                            cfg_fd = open(CONTRACT_CFG_NAME, O_CREAT | O_RDWR | O_TRUNC, 0664);
+                            if (cfg_fd == -1)
+                            {
+                                std::cerr << errno << ": Opening the file failed " << CONTRACT_CFG_NAME << std::endl;
+                                send_response_message(user, UPLOAD_RES, RESULT_FAIL, "ContractCfgCreateFailed");
+                                continue;
+                            }
+
+                            if (write(cfg_fd, json.data(), json.size()) < 0)
+                            {
+                                std::cerr << errno << ": Writing file failed " << CONTRACT_CFG_NAME << std::endl;
+                                close(cfg_fd);
+                                send_response_message(user, UPLOAD_RES, RESULT_FAIL, "ContractCfgWriteFailed");
+                                continue;
+                            }
+
+                            close(cfg_fd);
+                        }
+
+                        // mesh section. (only known_peers section handled currently)
+                        if (hp_cfg.contains("mesh") && hp_cfg["mesh"].contains("known_peers"))
+                        {
+                            const int count = hp_cfg["mesh"]["known_peers"].size();
+                            if (count > 0)
+                            {
+                                const char *peers[count];
+                                int i = 0;
+                                for (const auto &item : hp_cfg["mesh"]["known_peers"].array_range())
+                                    peers[i++] = item.as<std::string_view>().data();
+
+                                if (hp_update_peers(peers, count, NULL, 0) == -1)
+                                {
+                                    std::cerr << "Peer list update failed." << std::endl;
+                                    send_response_message(user, UPLOAD_RES, RESULT_FAIL, "PeerListUpdateFailed");
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
+                    if (cfg_fd != -1)
+                        close(cfg_fd);
 
                     // Rename bootstrap_upgrade.sh to post_exec.sh and grant 'execute' permission.
                     rename(SCRIPT_NAME, HP_POST_EXEC_SCRIPT_NAME);
