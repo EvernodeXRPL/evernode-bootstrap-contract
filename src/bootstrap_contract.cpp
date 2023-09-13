@@ -5,6 +5,8 @@
 
 #include "bootstrap_contract.hpp"
 
+constexpr const char *BINARY_NAME = "bootstrap_contract";
+
 // This script will be renamed by this contract as post_exec.sh which HotPocket considers as
 // post-execution script to be run after the contract execution completes.
 constexpr const char *SCRIPT_NAME = "bootstrap_upgrade.sh";
@@ -109,7 +111,7 @@ int main(int argc, char **argv)
                     close(archive_fd);
 
                     // Unzip and remove the bundle.
-                    std::string command = "/usr/bin/unzip -o %s && rm -f %s";
+                    std::string command;
                     command.resize(28 + 20);
                     sprintf((char *)command.data(), "/usr/bin/unzip -o %s && rm -f %s", BUNDLE_NAME, BUNDLE_NAME);
                     const int ret = system(command.data());
@@ -142,10 +144,12 @@ int main(int argc, char **argv)
                             std::cerr << errno << ": Reading the file failed " << HP_CFG_OVERRIDE_NAME << std::endl;
                             close(cfg_fd);
                             send_response_message(user, UPLOAD_RES, RESULT_FAIL, "HpCfgReadFailed");
+                            clear_extracts();
                             continue;
                         }
 
                         close(cfg_fd);
+                        remove(HP_CFG_OVERRIDE_NAME);
 
                         // Read the contract section if file exists.
                         jsoncons::ojson hp_cfg;
@@ -160,6 +164,7 @@ int main(int argc, char **argv)
                         {
                             std::cerr << "Parsing the config failed failed " << HP_CFG_OVERRIDE_NAME << std::endl;
                             send_response_message(user, UPLOAD_RES, RESULT_FAIL, "HpCfgJsonFailed");
+                            clear_extracts();
                             continue;
                         }
 
@@ -181,6 +186,7 @@ int main(int argc, char **argv)
                                     std::cerr << errno << ": Reading the file failed " << CONTRACT_CFG_NAME << std::endl;
                                     close(cfg_fd);
                                     send_response_message(user, UPLOAD_RES, RESULT_FAIL, "ContractCfgReadFailed");
+                                    clear_extracts();
                                     continue;
                                 }
 
@@ -195,6 +201,7 @@ int main(int argc, char **argv)
                                 {
                                     std::cerr << "Parsing the config failed failed " << CONTRACT_CFG_NAME << std::endl;
                                     send_response_message(user, UPLOAD_RES, RESULT_FAIL, "ContractCfgJsonFailed");
+                                    clear_extracts();
                                     continue;
                                 }
                             }
@@ -214,6 +221,7 @@ int main(int argc, char **argv)
                             {
                                 std::cerr << errno << ": Opening the file failed " << CONTRACT_CFG_NAME << std::endl;
                                 send_response_message(user, UPLOAD_RES, RESULT_FAIL, "ContractCfgCreateFailed");
+                                clear_extracts();
                                 continue;
                             }
 
@@ -222,6 +230,7 @@ int main(int argc, char **argv)
                                 std::cerr << errno << ": Writing file failed " << CONTRACT_CFG_NAME << std::endl;
                                 close(cfg_fd);
                                 send_response_message(user, UPLOAD_RES, RESULT_FAIL, "ContractCfgWriteFailed");
+                                clear_extracts();
                                 continue;
                             }
 
@@ -243,6 +252,7 @@ int main(int argc, char **argv)
                                 {
                                     std::cerr << "Peer list update failed." << std::endl;
                                     send_response_message(user, UPLOAD_RES, RESULT_FAIL, "PeerListUpdateFailed");
+                                    clear_extracts();
                                     continue;
                                 }
                             }
@@ -352,6 +362,17 @@ int clear_post_exec_err_log()
     close(fd);
     std::remove(POST_EXEC_ERR_FILE);
     return 0;
+}
+
+int clear_extracts()
+{
+    // Remove all files except the ones we need.
+    std::string command;
+    command.resize(52 + 18 + 20 + 13);
+    sprintf((char *)command.data(), "find . -not ( -name %s -or -name %s -or -name %s ) -delete", BINARY_NAME, SCRIPT_NAME, POST_EXEC_ERR_FILE);
+    const int ret = system(command.data());
+    command.clear();
+    return ret;
 }
 
 void send_response_message(const struct hp_user *user, std::string_view type, std::string_view status, std::string_view message)
