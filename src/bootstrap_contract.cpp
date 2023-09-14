@@ -118,14 +118,14 @@ int main(int argc, char **argv)
                     command.clear();
                     if (ret < 0)
                     {
-                        std::cerr << errno << ": System call failed " << std::endl;
+                        std::cerr << errno << ": System call failed." << std::endl;
                         send_response_message(user, UPLOAD_RES, RESULT_FAIL, "SyscallFailed");
                         continue;
                     }
 
                     if (WIFEXITED(ret) && WEXITSTATUS(ret) != 0x00)
                     {
-                        std::cerr << "Unzip failed " << std::endl;
+                        std::cerr << "Bundle unzip failed." << std::endl;
                         send_response_message(user, UPLOAD_RES, RESULT_FAIL, "UnzipFailed");
                         continue;
                     }
