@@ -369,7 +369,7 @@ int clear_extracts()
     // Remove all files except the ones we need.
     std::string command;
     command.resize(52 + 18 + 20 + 13);
-    sprintf((char *)command.data(), "find . -not ( -name %s -or -name %s -or -name %s ) -delete", BINARY_NAME, SCRIPT_NAME, POST_EXEC_ERR_FILE);
+    sprintf((char *)command.data(), "find . -not \\( -name %s -or -name %s -or -name %s \\) -delete", BINARY_NAME, SCRIPT_NAME, POST_EXEC_ERR_FILE);
     const int ret = system(command.data());
     command.clear();
     return ret;
