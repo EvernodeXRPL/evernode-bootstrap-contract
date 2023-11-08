@@ -48,6 +48,15 @@ const char *HP_POST_EXEC_SCRIPT_NAME = "post_exec.sh";
         }                                                                                     \
     }
 
+#define __HP_ASSIGN_UINT16(dest, elem)                                                        \
+    {                                                                                         \
+        if (elem->value->type == json_type_number)                                            \
+        {                                                                                     \
+            const struct json_number_s *value = (struct json_number_s *)elem->value->payload; \
+            dest = strtoul(value->number, NULL, 0);                                           \
+        }                                                                                     \
+    }
+
 #define __HP_ASSIGN_UINT64(dest, elem)                                                        \
     {                                                                                         \
         if (elem->value->type == json_type_number)                                            \
@@ -101,6 +110,14 @@ enum MODE
 {
     PUBLIC,
     PRIVATE
+};
+
+enum EXECUTION_MODE
+{
+    CONSENSUS,
+    CONSENSUS_FALLBACK,
+    READ_REQUEST,
+    UNKNOWN_MODE
 };
 
 struct hp_user_input
@@ -183,12 +200,18 @@ struct hp_round_limits_config
     size_t exec_timeout;
 };
 
+struct fallback_config
+{
+    bool execute;
+};
+
 struct consensus_config
 {
     enum MODE mode;
     uint32_t roundtime;
     uint32_t stage_slice;
     uint16_t threshold;
+    struct fallback_config fallback;
 };
 
 struct npl_config
@@ -213,7 +236,7 @@ struct hp_config
 
 struct hp_contract_context
 {
-    bool readonly;
+    char *mode;
     uint64_t timestamp;
     char contract_id[HP_CONTRACT_ID_SIZE + 1]; // +1 for null char.
     struct hp_public_key public_key;
@@ -222,6 +245,8 @@ struct hp_contract_context
     char lcl_hash[HP_HASH_SIZE + 1]; // +1 for null char.
     struct hp_users_collection users;
     struct hp_unl_collection unl;
+    uint16_t non_consensus_rounds; // Only available in fallback mode.
+    enum EXECUTION_MODE (*get_exec_mode)(const char *mode_str);
 };
 
 struct __hp_contract
@@ -248,6 +273,7 @@ int hp_update_peers(const char *add_peers[], const size_t add_peers_count, const
 void hp_set_config_string(char **config_str, const char *value, const size_t value_size);
 void hp_set_config_unl(struct hp_config *config, const struct hp_public_key *new_unl, const size_t new_unl_count);
 void hp_free_config(struct hp_config *config);
+enum EXECUTION_MODE hp_get_exec_mode(const char *mode);
 
 void __hp_parse_args_json(const struct json_object_s *object);
 int __hp_write_control_msg(const void *buf, const uint32_t len);
@@ -288,12 +314,16 @@ int hp_init_contract()
         {
             // Create and populate hotpocket context.
             __hpc.cctx = (struct hp_contract_context *)malloc(sizeof(struct hp_contract_context));
+            __hpc.cctx->mode = (char *)malloc(25 * sizeof(char));
             __hp_parse_args_json(object);
             __HP_FREE(root);
+
+            __hpc.cctx->get_exec_mode = hp_get_exec_mode;
 
             return 0;
         }
     }
+
     __HP_FREE(root);
     return -1;
 }
@@ -519,7 +549,9 @@ int hp_update_config(const struct hp_config *config)
 {
     struct hp_contract_context *cctx = __hpc.cctx;
 
-    if (cctx->readonly)
+    enum EXECUTION_MODE exec_mode = cctx->get_exec_mode(cctx->mode);
+
+    if (exec_mode == READ_REQUEST)
     {
         fprintf(stderr, "Config update not allowed in readonly mode.\n");
         return -1;
@@ -593,6 +625,19 @@ int hp_update_config(const struct hp_config *config)
 
     close(fd);
     return 0;
+}
+
+enum EXECUTION_MODE hp_get_exec_mode(const char *mode_str)
+{
+    if (strcmp(mode_str, "consensus") == 0)
+        return CONSENSUS;
+    else if (strcmp(mode_str, "consensus_fallback") == 0)
+        return CONSENSUS_FALLBACK;
+    else if (strcmp(mode_str, "read_req") == 0)
+        return READ_REQUEST;
+
+    // Handle unknown cases here
+    return UNKNOWN_MODE;
 }
 
 /**
@@ -782,19 +827,20 @@ int __hp_write_to_patch_file(const int fd, const struct hp_config *config)
     // Top-level field values.
 
     const char *bin_string = "    \"bin_path\": \"%s\",\n    \"bin_args\": \"%s\",\n";
-    const size_t bin_string_len = 43 + strlen(config->bin_path) + strlen(config->bin_args);
+    const size_t bin_string_len = 40 + strlen(config->bin_path) + strlen(config->bin_args);
     char bin_buf[bin_string_len];
     sprintf(bin_buf, bin_string, config->bin_path, config->bin_args);
     iov_vec[2].iov_base = bin_buf;
     iov_vec[2].iov_len = bin_string_len;
 
     pos = 0;
-    const size_t env_buf_size = 20 + (601 * config->environment->entry_count - (config->unl.count ? 1 : 0)) + (14 * config->environment->entry_count);
+    const size_t env_buf_size = 29 + (601 * config->environment->entry_count - (config->unl.count ? 1 : 0)) + (14 * config->environment->entry_count);
     char env_buf[env_buf_size];
 
     // Environment fields
 
     memcpy(env_buf, "    \"environment\": {", 20);
+    pos = 20;
     struct map_entry *entry = config->environment->entries;
     for (size_t i = 0; i < config->environment->entry_count; i++)
     {
@@ -813,27 +859,30 @@ int __hp_write_to_patch_file(const int fd, const struct hp_config *config)
         env_buf[pos++] = '"';
     }
     memcpy(env_buf + pos, "\n    },\n", 8);
-    iov_vec[3].iov_base = unl_buf;
-    iov_vec[3].iov_len = unl_buf_size;
+    iov_vec[3].iov_base = env_buf;
+    iov_vec[3].iov_len = env_buf_size;
 
     // Consensus fields
 
     const char *consensus_json = "    \"max_input_ledger_offset\": %s,\n"
                                  "    \"consensus\": {\n"
                                  "        \"mode\": %s,\n        \"roundtime\": %s,\n        \"stage_slice\": %s,\n"
-                                 "        \"threshold\": %s\n    },\n";
+                                 "        \"threshold\": %s,\n"
+                                 "        \"fallback\": {\n"
+                                 "            \"execute\": %s\n            }\n    },\n";
 
-    char max_input_ledger_offset_str[16], consensus_mode_str[10], roundtime_str[16], stage_slice_str[16], threshold_str[6];
+    char max_input_ledger_offset_str[16], consensus_mode_str[10], roundtime_str[16], stage_slice_str[16], threshold_str[6], fallback_exec_str[10];
 
     sprintf(max_input_ledger_offset_str, "%d", config->max_input_ledger_offset);
     sprintf(consensus_mode_str, "\"%s\"", config->consensus.mode == PUBLIC ? "public" : "private");
     sprintf(roundtime_str, "%d", config->consensus.roundtime);
     sprintf(stage_slice_str, "%d", config->consensus.stage_slice);
     sprintf(threshold_str, "%d", config->consensus.threshold);
+    sprintf(fallback_exec_str, "%s", config->consensus.fallback.execute == true ? "true" : "false");
 
-    const size_t consensus_json_len = 146 + strlen(max_input_ledger_offset_str) + strlen(consensus_mode_str) + strlen(roundtime_str) + strlen(stage_slice_str) + strlen(threshold_str);
+    const size_t consensus_json_len = 208 + strlen(max_input_ledger_offset_str) + strlen(consensus_mode_str) + strlen(roundtime_str) + strlen(stage_slice_str) + strlen(threshold_str) + strlen(fallback_exec_str);
     char consensus_buf[consensus_json_len];
-    sprintf(consensus_buf, consensus_json, max_input_ledger_offset_str, consensus_mode_str, roundtime_str, stage_slice_str, threshold_str);
+    sprintf(consensus_buf, consensus_json, max_input_ledger_offset_str, consensus_mode_str, roundtime_str, stage_slice_str, threshold_str, fallback_exec_str);
     iov_vec[4].iov_base = consensus_buf;
     iov_vec[4].iov_len = consensus_json_len;
 
@@ -854,7 +903,7 @@ int __hp_write_to_patch_file(const int fd, const struct hp_config *config)
 
     const char *round_limits_json = "    \"round_limits\": {\n"
                                     "        \"user_input_bytes\": %s,\n        \"user_output_bytes\": %s,\n        \"npl_output_bytes\": %s,\n"
-                                    "        \"proc_cpu_seconds\": %s,\n        \"proc_mem_bytes\": %s,\n        \"proc_ofd_count\": %s\n        \"exec_timeout\": %s\n    }\n}";
+                                    "        \"proc_cpu_seconds\": %s,\n        \"proc_mem_bytes\": %s,\n        \"proc_ofd_count\": %s,\n        \"exec_timeout\": %s\n    }\n}";
 
     char user_input_bytes_str[20], user_output_bytes_str[20], npl_output_bytes_str[20],
         proc_cpu_seconds_str[20], proc_mem_bytes_str[20], proc_ofd_count_str[20], exec_timeout_str[20];
@@ -868,7 +917,7 @@ int __hp_write_to_patch_file(const int fd, const struct hp_config *config)
     sprintf(proc_ofd_count_str, "%" PRIu64, config->round_limits.proc_ofd_count);
     sprintf(exec_timeout_str, "%" PRIu64, config->round_limits.exec_timeout);
 
-    const size_t round_limits_json_len = 230 + strlen(user_input_bytes_str) + strlen(user_output_bytes_str) + strlen(npl_output_bytes_str) +
+    const size_t round_limits_json_len = 231 + strlen(user_input_bytes_str) + strlen(user_output_bytes_str) + strlen(npl_output_bytes_str) +
                                          strlen(proc_cpu_seconds_str) + strlen(proc_mem_bytes_str) + strlen(proc_ofd_count_str) + strlen(exec_timeout_str);
     char round_limits_buf[round_limits_json_len];
     sprintf(round_limits_buf, round_limits_json,
@@ -878,7 +927,7 @@ int __hp_write_to_patch_file(const int fd, const struct hp_config *config)
     iov_vec[6].iov_len = round_limits_json_len;
 
     if (ftruncate(fd, 0) == -1 ||         // Clear any previous content in the file.
-        pwritev(fd, iov_vec, 6, 0) == -1) // Start writing from begining.
+        pwritev(fd, iov_vec, 7, 0) == -1) // Start writing from begining.
         return -1;
 
     return 0;
@@ -936,8 +985,12 @@ void __hp_populate_patch_from_json_object(struct hp_config *config, const struct
                 const struct json_object_s *env_obj = (struct json_object_s *)elem->value->payload;
                 const size_t elem_count = env_obj->length;
 
-                config->environment->entry_count = elem_count;
-                config->environment->entries = elem_count ? (struct map_entry *)malloc(sizeof(struct map_entry) * elem_count) : NULL;
+                struct map *env_map = (struct map *)malloc(sizeof(struct map));
+
+                env_map->entry_count = elem_count;
+                env_map->entries = elem_count ? (struct map_entry *)malloc(sizeof(struct map_entry) * elem_count) : NULL;
+
+                config->environment = env_map;
 
                 if (elem_count > 0)
                 {
@@ -988,6 +1041,20 @@ void __hp_populate_patch_from_json_object(struct hp_config *config, const struct
                         const struct json_string_s *value = (struct json_string_s *)sub_ele->value->payload;
                         config->consensus.mode = (strcmp(value->string, "public") == 0) ? PUBLIC : PRIVATE;
                     }
+                }
+                else if (strcmp(sub_ele->name->string, "fallback") == 0)
+                {
+                    struct json_object_s *object_1 = (struct json_object_s *)sub_ele->value->payload;
+                    struct json_object_element_s *sub_ele_1 = object_1->start;
+                    do
+                    {
+                        if (strcmp(sub_ele_1->name->string, "execute") == 0)
+                        {
+
+                            __HP_ASSIGN_BOOL(config->consensus.fallback.execute, sub_ele_1);
+                        }
+                        sub_ele_1 = sub_ele_1->next;
+                    } while (sub_ele_1);
                 }
                 sub_ele = sub_ele->next;
             } while (sub_ele);
@@ -1076,9 +1143,9 @@ void __hp_parse_args_json(const struct json_object_s *object)
         {
             __HP_ASSIGN_UINT64(cctx->timestamp, elem);
         }
-        else if (strcmp(k->string, "readonly") == 0)
+        else if (strcmp(k->string, "mode") == 0)
         {
-            __HP_ASSIGN_BOOL(cctx->readonly, elem);
+            __HP_ASSIGN_CHAR_PTR(cctx->mode, elem);
         }
         else if (strcmp(k->string, "lcl_seq_no") == 0)
         {
@@ -1187,6 +1254,10 @@ void __hp_parse_args_json(const struct json_object_s *object)
         else if (strcmp(k->string, "control_fd") == 0)
         {
             __HP_ASSIGN_INT(__hpc.control_fd, elem);
+        }
+        else if (strcmp(k->string, "non_consensus_rounds") == 0)
+        {
+            __HP_ASSIGN_UINT16(cctx->non_consensus_rounds, elem);
         }
 
         elem = elem->next;

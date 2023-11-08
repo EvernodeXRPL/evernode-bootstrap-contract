@@ -63,6 +63,21 @@ function append_gt0_field() {
 }
 
 # If field exists, append to patch json.
+function append_boolean_field() {
+    local field=$1
+    local val=$(jq ".$field" $contract_config)
+    if [ "$val" != "null" ]; then
+        if [[ "$val" != "true" && "$val" != "false" ]]; then
+            echo "Invalid $field. Should be a boolean figure."
+            return 1
+        fi
+        [ "${patch_json: -1}" != "{" ] && patch_json="$patch_json,"
+        patch_json="$patch_json${field##*.}:$val" # Append last . component field name with value.
+    fi
+    return 0
+}
+
+# If field exists, append to patch json.
 function append_range_field() {
     local field=$1
     local min=$2
@@ -172,6 +187,16 @@ function upgrade() {
             if ! append_range_field "consensus.threshold" 1 100; then
                 print_err "InvalidConsensusThreshold"
                 return 1
+            fi
+
+            local fallback_config=$(jq '.consensus.fallback' $contract_config)
+            if [ "$fallback_config" != "null" ]; then
+                [ "${patch_json: -1}" != "{" ] && patch_json="$patch_json,fallback:{" || patch_json="$patch_json fallback:{"
+                if ! append_boolean_field "consensus.fallback.execute" ; then
+                    print_err "InvalidConsensusFallbackExecution"
+                    return 1
+                fi
+                patch_json="$patch_json}"
             fi
 
             patch_json="$patch_json}"
