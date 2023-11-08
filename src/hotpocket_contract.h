@@ -48,6 +48,15 @@ const char *HP_POST_EXEC_SCRIPT_NAME = "post_exec.sh";
         }                                                                                     \
     }
 
+#define __HP_ASSIGN_UINT16(dest, elem)                                                        \
+    {                                                                                         \
+        if (elem->value->type == json_type_number)                                            \
+        {                                                                                     \
+            const struct json_number_s *value = (struct json_number_s *)elem->value->payload; \
+            dest = strtoul(value->number, NULL, 0);                                           \
+        }                                                                                     \
+    }
+
 #define __HP_ASSIGN_UINT64(dest, elem)                                                        \
     {                                                                                         \
         if (elem->value->type == json_type_number)                                            \
@@ -236,7 +245,8 @@ struct hp_contract_context
     char lcl_hash[HP_HASH_SIZE + 1]; // +1 for null char.
     struct hp_users_collection users;
     struct hp_unl_collection unl;
-    enum EXECUTION_MODE (*get_exec_mode)(char *mode_str);
+    uint16_t non_consensus_rounds; // Only available in fallback mode.
+    enum EXECUTION_MODE (*get_exec_mode)(const char *mode_str);
 };
 
 struct __hp_contract
@@ -263,7 +273,7 @@ int hp_update_peers(const char *add_peers[], const size_t add_peers_count, const
 void hp_set_config_string(char **config_str, const char *value, const size_t value_size);
 void hp_set_config_unl(struct hp_config *config, const struct hp_public_key *new_unl, const size_t new_unl_count);
 void hp_free_config(struct hp_config *config);
-enum EXECUTION_MODE hp_get_exec_mode(char *mode);
+enum EXECUTION_MODE hp_get_exec_mode(const char *mode);
 
 void __hp_parse_args_json(const struct json_object_s *object);
 int __hp_write_control_msg(const void *buf, const uint32_t len);
@@ -617,7 +627,7 @@ int hp_update_config(const struct hp_config *config)
     return 0;
 }
 
-enum EXECUTION_MODE hp_get_exec_mode(char *mode_str)
+enum EXECUTION_MODE hp_get_exec_mode(const char *mode_str)
 {
     if (strcmp(mode_str, "consensus") == 0)
         return CONSENSUS;
@@ -1244,6 +1254,10 @@ void __hp_parse_args_json(const struct json_object_s *object)
         else if (strcmp(k->string, "control_fd") == 0)
         {
             __HP_ASSIGN_INT(__hpc.control_fd, elem);
+        }
+        else if (strcmp(k->string, "non_consensus_rounds") == 0)
+        {
+            __HP_ASSIGN_UINT16(cctx->non_consensus_rounds, elem);
         }
 
         elem = elem->next;
